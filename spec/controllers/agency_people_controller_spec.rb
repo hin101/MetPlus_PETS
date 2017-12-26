@@ -2,18 +2,18 @@ require 'rails_helper'
 include JobSeekersViewer
 
 RSpec.describe AgencyPeopleController, type: :controller do
-  let!(:agency)    { FactoryGirl.create(:agency) }
-  let!(:aa_person) { FactoryGirl.create(:agency_admin, agency: agency) }
-  let!(:cm_person) { FactoryGirl.create(:case_manager, agency: agency) }
-  let!(:jd_person) { FactoryGirl.create(:job_developer, agency: agency) }
-  let(:adam)       { FactoryGirl.create(:job_seeker, first_name: 'Adam') }
-  let(:bob)        { FactoryGirl.create(:job_seeker, first_name: 'Bob') }
-  let(:charles)    { FactoryGirl.create(:job_seeker, first_name: 'Charles') }
-  let(:dave)       { FactoryGirl.create(:job_seeker, first_name: 'Dave') }
+  let!(:agency)    { FactoryBot.create(:agency) }
+  let!(:aa_person) { FactoryBot.create(:agency_admin, agency: agency) }
+  let!(:cm_person) { FactoryBot.create(:case_manager, agency: agency) }
+  let!(:jd_person) { FactoryBot.create(:job_developer, agency: agency) }
+  let(:adam)       { FactoryBot.create(:job_seeker, first_name: 'Adam') }
+  let(:bob)        { FactoryBot.create(:job_seeker, first_name: 'Bob') }
+  let(:charles)    { FactoryBot.create(:job_seeker, first_name: 'Charles') }
+  let(:dave)       { FactoryBot.create(:job_seeker, first_name: 'Dave') }
 
-  let(:aa_role) { FactoryGirl.create(:agency_role, role: AgencyRole::ROLE[:AA]) }
-  let(:jd_role) { FactoryGirl.create(:agency_role, role: AgencyRole::ROLE[:JD]) }
-  let(:cm_role) { FactoryGirl.create(:agency_role, role: AgencyRole::ROLE[:CM]) }
+  let(:aa_role) { FactoryBot.create(:agency_role, role: AgencyRole::ROLE[:AA]) }
+  let(:jd_role) { FactoryBot.create(:agency_role, role: AgencyRole::ROLE[:JD]) }
+  let(:cm_role) { FactoryBot.create(:agency_role, role: AgencyRole::ROLE[:CM]) }
 
   describe 'GET #home' do
     before(:each) do
@@ -104,7 +104,17 @@ RSpec.describe AgencyPeopleController, type: :controller do
   end
 
   describe 'PATCH #update' do
-    let(:job_seeker) { FactoryGirl.create(:job_seeker) }
+    let!(:assign_agency_person_mock) do
+      instance_double('AgencyPeople::AssignNewJobSeekers')
+    end
+    let(:job_seeker) { FactoryBot.create(:job_seeker) }
+    before(:each) do
+      allow(AgencyPeople::AssignNewJobSeekers)
+        .to receive(:new).and_return(assign_agency_person_mock)
+      allow(assign_agency_person_mock)
+        .to receive(:call)
+      allow(Event).to receive(:create)
+    end
 
     context 'valid attributes' do
       before(:each) do
@@ -158,10 +168,13 @@ RSpec.describe AgencyPeopleController, type: :controller do
     context 'assign as job developer fails when not in that role' do
       before(:each) do
         person_hash = aa_person.attributes.merge(aa_person.user.attributes)
-        person_hash[:agency_role_ids] = []
         person_hash[:as_jd_job_seeker_ids] = [job_seeker.id]
         person_hash[:as_cm_job_seeker_ids] = []
         sign_in aa_person
+
+        allow(assign_agency_person_mock)
+          .to receive(:call)
+          .and_raise(JobSeekers::AssignAgencyPerson::NotAJobDeveloper)
         patch :update, id: aa_person, agency_person: person_hash
       end
 
@@ -182,10 +195,13 @@ RSpec.describe AgencyPeopleController, type: :controller do
     context 'assign as case manager fails when not in that role' do
       before(:each) do
         person_hash = aa_person.attributes.merge(aa_person.user.attributes)
-        person_hash[:agency_role_ids] = []
         person_hash[:as_jd_job_seeker_ids] = []
         person_hash[:as_cm_job_seeker_ids] = [job_seeker.id]
         sign_in aa_person
+
+        allow(assign_agency_person_mock)
+          .to receive(:call)
+          .and_raise(JobSeekers::AssignAgencyPerson::NotACaseManager)
         patch :update, id: aa_person, agency_person: person_hash
       end
 
@@ -215,17 +231,12 @@ RSpec.describe AgencyPeopleController, type: :controller do
       before(:each) do
         allow(Pusher).to receive(:trigger)
         sign_in aa_person
-      end
-
-      it 'assigns job seekers to the job developer' do
         patch :update, id: jd_person, agency_person: person_hash
-        expect(assigns(:agency_person).as_jd_job_seeker_ids)
-          .to contain_exactly(job_seeker.id, adam.id)
       end
 
-      it 'sends notification emails to job seekers and to JD for each job seeker' do
-        expect { patch :update, id: jd_person, agency_person: person_hash }
-          .to change(all_emails, :count).by(+4)
+      it 'calls interactor to assign the JD' do
+        expect(assign_agency_person_mock)
+          .to have_received(:call).twice
       end
     end
 
@@ -239,23 +250,29 @@ RSpec.describe AgencyPeopleController, type: :controller do
       end
 
       before(:each) do
-        allow(Pusher).to receive(:trigger)
         sign_in aa_person
+        patch :update, id: cm_person, agency_person: person_hash
       end
 
-      it 'assigns job seekers to the case manager' do
-        patch :update, id: cm_person, agency_person: person_hash
-        expect(assigns(:agency_person).as_cm_job_seeker_ids)
-          .to contain_exactly(job_seeker.id, adam.id)
-      end
-      it 'sends notification emails to job seekers and to CM for each job seeker' do
-        expect { patch :update, id: cm_person, agency_person: person_hash }
-          .to change(all_emails, :count).by(+4)
+      it 'calls interactor to assign the Case Manager' do
+        expect(assign_agency_person_mock)
+          .to have_received(:call).twice
       end
     end
   end
 
   describe 'PATCH #assign_job_seeker' do
+    let!(:assign_agency_person_mock) { instance_double('JobSeekers::AssignAgencyPerson') }
+
+    before(:each) do
+      allow(JobSeekers::AssignAgencyPerson)
+        .to receive(:new).and_return(assign_agency_person_mock)
+      allow(assign_agency_person_mock)
+        .to receive(:call)
+
+      allow(subject).to receive(:authorize)
+    end
+
     context 'assign job developer to job seeker' do
       before do |example|
         allow(Pusher).to receive(:trigger)
@@ -267,43 +284,33 @@ RSpec.describe AgencyPeopleController, type: :controller do
         end
       end
 
-      it 'assigns agency_person instance var' do
-        expect(assigns(:agency_person)).to eq jd_person
+      context 'when is able to assign' do
+        it 'authorizes the job developer' do
+          expect(subject).to have_received(:authorize).with(jd_person)
+        end
+
+        it 'calls interactor to assign the JD' do
+          expect(assign_agency_person_mock)
+            .to have_received(:call)
+            .with(adam, :JD, jd_person)
+        end
+
+        it 'renders partial' do
+          expect(response).to render_template(partial: '_assigned_agency_person')
+        end
       end
 
-      it 'assigns job_seeker instance var' do
-        expect(assigns(:job_seeker)).to eq adam
-      end
-
-      it 'returns error if unknown agency_role specified', :skip_before do
-        xhr :patch, :assign_job_seeker, id: jd_person.id,
-                                        job_seeker_id: adam.id,
-                                        agency_role: 'XYZ'
-        expect(response).to have_http_status(:bad_request)
-      end
-
-      it 'returns error if attempt to assign JD role to CM', :skip_before do
-        xhr :patch, :assign_job_seeker, id: cm_person.id,
-                                        job_seeker_id: adam.id,
-                                        agency_role: 'JD'
-        expect(response).to have_http_status(:forbidden)
-      end
-
-      it 'increases agency_role count', :skip_before do
-        expect do
-          xhr :patch, :assign_job_seeker, id: jd_person.id,
+      context 'when the agency person is not a JD' do
+        it 'returns error', :skip_before do
+          allow(assign_agency_person_mock)
+            .to receive(:call)
+            .and_raise(JobSeekers::AssignAgencyPerson::NotAJobDeveloper)
+          xhr :patch, :assign_job_seeker, id: cm_person.id,
                                           job_seeker_id: adam.id,
                                           agency_role: 'JD'
+
+          expect(response).to have_http_status(:forbidden)
         end
-          .to change(AgencyRelation, :count).by(+1)
-      end
-
-      it 'assigns job developer to job seeker' do
-        expect(assigns(:job_seeker).job_developer).to eq jd_person
-      end
-
-      it 'renders partial' do
-        expect(response).to render_template(partial: '_assigned_agency_person')
       end
     end
 
@@ -318,43 +325,47 @@ RSpec.describe AgencyPeopleController, type: :controller do
         end
       end
 
-      it 'assigns agency_person instance var' do
-        expect(assigns(:agency_person)).to eq cm_person
-      end
+      context 'when is able to assign' do
+        it 'authorizes the case manager' do
+          expect(subject).to have_received(:authorize).with(cm_person)
+        end
 
-      it 'assigns job_seeker instance var' do
-        expect(assigns(:job_seeker)).to eq adam
-      end
+        it 'calls interactor to assign the JD' do
+          expect(assign_agency_person_mock)
+            .to have_received(:call)
+            .with(adam, :CM, cm_person)
+        end
 
-      it 'returns error if unknown agency_role specified', :skip_before do
-        xhr :patch, :assign_job_seeker, id: cm_person.id,
-                                        job_seeker_id: adam.id,
-                                        agency_role: 'XYZ'
-        expect(response).to have_http_status(:bad_request)
+        it 'renders partial' do
+          expect(response).to render_template(partial: '_assigned_agency_person')
+        end
       end
-
-      it 'returns error if attempt to assign CM role to JD', :skip_before do
-        xhr :patch, :assign_job_seeker, id: jd_person.id,
-                                        job_seeker_id: adam.id,
-                                        agency_role: 'CM'
-        expect(response).to have_http_status(:forbidden)
-      end
-
-      it 'increases agency_role count', :skip_before do
-        expect do
-          xhr :patch, :assign_job_seeker, id: cm_person.id,
+      context 'when the agency person is not a CM' do
+        it 'returns error', :skip_before do
+          allow(assign_agency_person_mock)
+            .to receive(:call)
+            .and_raise(JobSeekers::AssignAgencyPerson::NotACaseManager)
+          xhr :patch, :assign_job_seeker, id: jd_person.id,
                                           job_seeker_id: adam.id,
                                           agency_role: 'CM'
+          expect(response).to have_http_status(:forbidden)
         end
-          .to change(AgencyRelation, :count).by(+1)
       end
+    end
 
-      it 'assigns case manager to job seeker' do
-        expect(assigns(:job_seeker).case_manager).to eq cm_person
-      end
+    context 'assign unknown agency role' do
+      it 'returns error' do
+        allow(Pusher).to receive(:trigger)
+        allow(assign_agency_person_mock)
+          .to receive(:call)
+          .and_raise(JobSeekers::AssignAgencyPerson::InvalidRole)
 
-      it 'renders partial' do
-        expect(response).to render_template(partial: '_assigned_agency_person')
+        sign_in aa_person
+        xhr :patch, :assign_job_seeker, id: cm_person.id,
+                                        job_seeker_id: adam.id,
+                                        agency_role: 'AA'
+
+        expect(response).to have_http_status(:bad_request)
       end
     end
   end
@@ -422,13 +433,13 @@ RSpec.describe AgencyPeopleController, type: :controller do
         sign_in aa_person
         patch :update_profile,
               agency_person:
-                FactoryGirl.attributes_for(:agency_person,
-                                           password: '',
-                                           password_confirmation: '')
-                  .merge(FactoryGirl.attributes_for(:user,
-                                                    first_name: 'John',
-                                                    last_name: 'Smith',
-                                                    phone: '780-890-8976')),
+                FactoryBot.attributes_for(:agency_person,
+                                          password: '',
+                                          password_confirmation: '')
+                          .merge(FactoryBot.attributes_for(:user,
+                                                           first_name: 'John',
+                                                           last_name: 'Smith',
+                                                           phone: '780-890-8976')),
               id: aa_person
         aa_person.reload
       end
@@ -505,22 +516,22 @@ RSpec.describe AgencyPeopleController, type: :controller do
   describe 'GET #my_js_as_jd' do
     context 'job developer cum case manager with job seekers' do
       before :each do
-        @jd_cm = FactoryGirl.create(:jd_cm, agency: agency)
-        @job_developer = FactoryGirl.create(:job_developer, agency: agency)
+        @jd_cm = FactoryBot.create(:jd_cm, agency: agency)
+        @job_developer = FactoryBot.create(:job_developer, agency: agency)
 
-        @user1 = FactoryGirl.create(:user, first_name: 'John', last_name: 'Joe')
-        @js1 = FactoryGirl.create(:job_seeker, user: @user1)
+        @user1 = FactoryBot.create(:user, first_name: 'John', last_name: 'Joe')
+        @js1 = FactoryBot.create(:job_seeker, user: @user1)
         @js1.assign_job_developer(@jd_cm, agency)
 
-        @user2 = FactoryGirl.create(:user, first_name: 'Jack', last_name: 'Doe')
-        @js2 = FactoryGirl.create(:job_seeker, user: @user2)
+        @user2 = FactoryBot.create(:user, first_name: 'Jack', last_name: 'Doe')
+        @js2 = FactoryBot.create(:job_seeker, user: @user2)
         @js2.assign_job_developer(@jd_cm, agency)
 
-        @user3 = FactoryGirl.create(:user, first_name: 'Adam', last_name: 'Doe')
-        @js3 = FactoryGirl.create(:job_seeker, user: @user3)
+        @user3 = FactoryBot.create(:user, first_name: 'Adam', last_name: 'Doe')
+        @js3 = FactoryBot.create(:job_seeker, user: @user3)
         @js3.assign_job_developer(@jd_cm, agency)
 
-        @js4 = FactoryGirl.create(:job_seeker)
+        @js4 = FactoryBot.create(:job_seeker)
         @js4.assign_job_developer(@job_developer, agency)
         @js4.assign_case_manager(@jd_cm, agency)
 
@@ -534,7 +545,7 @@ RSpec.describe AgencyPeopleController, type: :controller do
 
       it 'returns his job seekers in alphabetical order' do
         [@js1, @js2, @js3].each do |js|
-          FactoryGirl.create(:resume, job_seeker: js)
+          FactoryBot.create(:resume, job_seeker: js)
         end
 
         xhr :get, :my_js_as_jd, id: @jd_cm.id, format: :json
@@ -549,7 +560,7 @@ RSpec.describe AgencyPeopleController, type: :controller do
 
       it 'returns his job seekers with consent' do
         [@js1, @js2, @js3].each do |js|
-          FactoryGirl.create(:resume, job_seeker: js)
+          FactoryBot.create(:resume, job_seeker: js)
         end
 
         @js1.update_attribute(:consent, false)
@@ -563,7 +574,7 @@ RSpec.describe AgencyPeopleController, type: :controller do
       end
 
       it 'disables application for his job seekers without resume' do
-        FactoryGirl.create(:resume, job_seeker: @js1)
+        FactoryBot.create(:resume, job_seeker: @js1)
         xhr :get, :my_js_as_jd, id: @jd_cm.id, format: :json
         expect(JSON.parse(response.body))
           .to eq('results' =>
@@ -577,9 +588,9 @@ RSpec.describe AgencyPeopleController, type: :controller do
 
     context 'job developer without job seeker' do
       before :each do
-        @job_developer1 = FactoryGirl.create(:job_developer, agency: agency)
-        @js1 = FactoryGirl.create(:job_seeker)
-        @js2 = FactoryGirl.create(:job_seeker)
+        @job_developer1 = FactoryBot.create(:job_developer, agency: agency)
+        @js1 = FactoryBot.create(:job_seeker)
+        @js2 = FactoryBot.create(:job_seeker)
         sign_in @job_developer1
         xhr :get, :my_js_as_jd, id: @job_developer1.id, format: :json
       end

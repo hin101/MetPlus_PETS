@@ -34,33 +34,33 @@ RSpec.shared_examples 'denies access to unauthorized people' do
 end
 
 RSpec.describe JobApplicationsController, type: :controller do
-  let(:company)       { FactoryGirl.create(:company) }
-  let(:job)           { FactoryGirl.create(:job, company: company) }
-  let(:job_seeker)    { FactoryGirl.create(:job_seeker) }
-  let(:job_seeker2)   { FactoryGirl.create(:job_seeker) }
-  let!(:company_admin) { FactoryGirl.create(:company_admin, company: company) }
-  let(:company_contact) { FactoryGirl.create(:company_contact, company: company) }
+  let(:company)       { FactoryBot.create(:company) }
+  let(:job)           { FactoryBot.create(:job, company: company) }
+  let(:job_seeker)    { FactoryBot.create(:job_seeker) }
+  let(:job_seeker2)   { FactoryBot.create(:job_seeker) }
+  let!(:company_admin) { FactoryBot.create(:company_admin, company: company) }
+  let(:company_contact) { FactoryBot.create(:company_contact, company: company) }
   let(:inactive_application) do
-    FactoryGirl.create(:job_application,
-                       job: job, job_seeker: job_seeker2,
-                       status: 'accepted')
+    FactoryBot.create(:job_application,
+                      job: job, job_seeker: job_seeker2,
+                      status: 'accepted')
   end
   let(:valid_application) do
-    FactoryGirl.create(:job_application, job: job, job_seeker: job_seeker)
+    FactoryBot.create(:job_application, job: job, job_seeker: job_seeker)
   end
-  let(:agency)       { FactoryGirl.create(:agency) }
-  let(:agency_admin) { FactoryGirl.create(:agency_admin, agency: agency) }
-  let(:company2)     { FactoryGirl.create(:company) }
+  let(:agency)       { FactoryBot.create(:agency) }
+  let(:agency_admin) { FactoryBot.create(:agency_admin, agency: agency) }
+  let(:company2)     { FactoryBot.create(:company) }
   let(:company_admin2) do
-    FactoryGirl.create(:company_admin,
-                       company: company2)
+    FactoryBot.create(:company_admin,
+                      company: company2)
   end
   let(:company_contact2) do
-    FactoryGirl.create(:company_contact,
-                       company: company2)
+    FactoryBot.create(:company_contact,
+                      company: company2)
   end
-  let(:job_developer) { FactoryGirl.create(:job_developer, agency: agency) }
-  let(:case_manager)  { FactoryGirl.create(:case_manager, agency: agency) }
+  let(:job_developer) { FactoryBot.create(:job_developer, agency: agency) }
+  let(:case_manager)  { FactoryBot.create(:case_manager, agency: agency) }
 
   before(:each) do
     stub_cruncher_authenticate
@@ -105,12 +105,16 @@ RSpec.describe JobApplicationsController, type: :controller do
 
     context 'authenticated' do
       describe 'authorized access' do
+        let(:hire_mock) { double(JobApplications::Hire) }
         before(:each) do
           sign_in company_admin
+          allow(JobApplications::Hire).to receive(:new)
+            .and_return(hire_mock)
         end
 
         context 'inactive job application' do
           before(:each) do
+            allow(hire_mock).to receive(:call).and_raise(JobApplications::JobNotActive)
             patch :accept, id: inactive_application
           end
 
@@ -122,11 +126,15 @@ RSpec.describe JobApplicationsController, type: :controller do
           it 'redirect to the specific job show page' do
             expect(response).to redirect_to(job_url(inactive_application.job))
           end
+
+          it 'calls interactor with the job application' do
+            expect(hire_mock).to have_received(:call).with(inactive_application)
+          end
         end
 
         context 'valid job application accepted' do
           before(:each) do
-            expect_any_instance_of(JobApplication).to receive(:accept)
+            allow(hire_mock).to receive(:call)
             request
           end
 
@@ -136,6 +144,10 @@ RSpec.describe JobApplicationsController, type: :controller do
 
           it 'redirect to the specific job show page' do
             expect(response).to redirect_to(job_url(valid_application.job))
+          end
+
+          it 'calls interactor with the job application' do
+            expect(hire_mock).to have_received(:call).with(valid_application)
           end
         end
       end
@@ -158,12 +170,17 @@ RSpec.describe JobApplicationsController, type: :controller do
 
     context 'authenticated' do
       describe 'authorized access' do
+        let(:reject_mock) { double(JobApplications::Reject) }
+
         before(:each) do
           sign_in company_admin
+          allow(JobApplications::Reject).to receive(:new)
+            .and_return(reject_mock)
         end
 
         context 'inactive job application' do
           before(:each) do
+            allow(reject_mock).to receive(:call).and_raise(JobApplications::JobNotActive)
             patch :reject, id: inactive_application
           end
 
@@ -175,17 +192,16 @@ RSpec.describe JobApplicationsController, type: :controller do
           it 'redirect to the specific job application show page' do
             expect(response).to redirect_to(application_path(inactive_application))
           end
+
+          it 'calls interactor with the job application' do
+            expect(reject_mock).to have_received(:call).with(inactive_application, nil)
+          end
         end
 
         context 'valid job application rejected' do
           before(:each) do
-            expect_any_instance_of(JobApplication).to receive(:reject)
+            allow(reject_mock).to receive(:call)
             request
-          end
-
-          it 'stores rejection in db' do
-            app = JobApplication.find(valid_application.id)
-            expect(app.reason_for_rejection).to eq 'Skills did not match'
           end
 
           it 'show a flash message of type notice' do
@@ -194,6 +210,11 @@ RSpec.describe JobApplicationsController, type: :controller do
 
           it 'redirect to the specific job application show page' do
             expect(response).to redirect_to(job_url(valid_application.job))
+          end
+
+          it 'calls interactor with the job application' do
+            expect(reject_mock)
+              .to have_received(:call).with(valid_application, 'Skills did not match')
           end
         end
       end
@@ -213,12 +234,17 @@ RSpec.describe JobApplicationsController, type: :controller do
 
     context 'authenticated' do
       describe 'authorized access' do
+        let(:application_process_mock) { double(JobApplications::Processing) }
         before(:each) do
           sign_in company_admin
+          allow(JobApplications::Processing).to receive(:new)
+            .and_return(application_process_mock)
         end
 
         context 'inactive job application' do
           before(:each) do
+            allow(application_process_mock)
+              .to receive(:call).and_raise(JobApplications::JobNotActive)
             patch :process_application, id: inactive_application
           end
 
@@ -230,11 +256,17 @@ RSpec.describe JobApplicationsController, type: :controller do
           it 'redirect to the specific job show page' do
             expect(response).to redirect_to(job_url(inactive_application.job))
           end
+
+          it 'interator to have been called' do
+            expect(application_process_mock)
+              .to have_received(:call)
+              .with(inactive_application, company_admin.user)
+          end
         end
 
         context 'valid job application started processing' do
           before(:each) do
-            expect_any_instance_of(JobApplication).to receive(:process)
+            allow(application_process_mock).to receive(:call)
             request
           end
 
@@ -244,6 +276,12 @@ RSpec.describe JobApplicationsController, type: :controller do
 
           it 'redirect to the specific job show page' do
             expect(response).to redirect_to(job_url(valid_application.job))
+          end
+
+          it 'interator to have been called' do
+            expect(application_process_mock)
+              .to have_received(:call)
+              .with(valid_application, company_admin.user)
           end
         end
       end
@@ -255,21 +293,21 @@ RSpec.describe JobApplicationsController, type: :controller do
   end
 
   describe 'GET #list' do
-    let(:job1) { FactoryGirl.create(:job) }
-    let(:job2) { FactoryGirl.create(:job) }
-    let(:job3) { FactoryGirl.create(:job) }
+    let(:job1) { FactoryBot.create(:job) }
+    let(:job2) { FactoryBot.create(:job) }
+    let(:job3) { FactoryBot.create(:job) }
     let(:app1) do
-      FactoryGirl.create(:job_application, job: job1, job_seeker: job_seeker)
+      FactoryBot.create(:job_application, job: job1, job_seeker: job_seeker)
     end
     let(:app2) do
-      FactoryGirl.create(:job_application, job: job2, job_seeker: job_seeker)
+      FactoryBot.create(:job_application, job: job2, job_seeker: job_seeker)
     end
     let(:app3) do
-      FactoryGirl.create(:job_application, job: job3, job_seeker: job_seeker)
+      FactoryBot.create(:job_application, job: job3, job_seeker: job_seeker)
     end
     let(:app4) do
-      FactoryGirl.create(:job_application,
-                         job: job3, job_seeker: FactoryGirl.create(:job_seeker))
+      FactoryBot.create(:job_application,
+                        job: job3, job_seeker: FactoryBot.create(:job_seeker))
     end
 
     before(:each) do

@@ -10,7 +10,7 @@ Documentation:
 Style/FrozenStringLiteralComment:
   Enabled: false
 
-Style/DotPosition:
+Layout/DotPosition:
   Description: 'Checks the position of the dot in multi-line method call'
   EnforcedStyle: leading
 
@@ -19,3 +19,18 @@ Style/Documentation:
 
 Metrics/LineLength:
   Max: 90
+Metrics/BlockLength:
+  Enabled: true
+  Exclude: 
+    - spec/**/*
+    - features/step_definitions/*
+Metrics/ModuleLength:
+  Enabled: true
+  Exclude: 
+    - spec/**/*
+    - features/step_definitions/*
+Metrics/MethodLength:
+  Enabled: true
+  Exclude: 
+    - spec/**/*
+    - features/step_definitions/*    
