@@ -21,10 +21,33 @@ RSpec.describe JobApplication, type: :model do
   describe 'Associations' do
     it { is_expected.to belong_to :job_seeker }
     it { is_expected.to belong_to :job }
-    it { is_expected.to have_many(:status_changes) }
+    it { is_expected.to have_many(:status_changes).dependent(:destroy) }
     it { is_expected.to have_many(:application_questions) }
-    it { is_expected.to have_many(:questions).dependent(:destroy) }
+    it {
+      is_expected.to have_many(:questions)
+        .through(:application_questions).dependent(:destroy)
+    }
+    describe 'dependent: :destroy' do
+      let(:aq) do
+        FactoryBot.create(:application_question,
+                          job_application: FactoryBot.create(:job_application),
+                          question: FactoryBot.create(:question))
+      end
+      it 'destroys questions with join association when job_application is destroyed' do
+        questions = aq.job_application.questions
+        expect { aq.job_application.destroy }.to \
+          change { questions.count }.from(1).to(0).and \
+            change { ApplicationQuestion.count }.by(-1)
+      end
+      it 'destroys status_changes with association when job_application is destroyed' do
+        statuses = aq.job_application.status_changes
+        expect { aq.job_application.destroy }.to \
+          change { statuses.count }.from(1).to(0).and \
+            change { StatusChange.count }.by(-1)
+      end
+    end
   end
+
   describe 'Validations' do
     it { is_expected.to validate_uniqueness_of(:job_seeker_id).scoped_to(:job_id) }
     let(:job_seeker) { FactoryBot.create(:job_seeker) }
